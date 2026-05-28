@@ -1,91 +1,102 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import VortexGallery from "@/lib/VortexGallery";
-import Lenis from "lenis";
 import {
   siteConfig,
   galleryConfig,
 } from "@/config";
 import ImageDetailOverlay from "@/components/ImageDetailOverlay";
 
+interface AtlasMeta {
+  xStart: number;
+  xEnd: number;
+  yStart: number;
+  yEnd: number;
+  aspectRatio: number;
+}
+
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const vortexRef = useRef<VortexGallery | null>(null);
-  const lenisRef = useRef<Lenis | null>(null);
+  const vortexRef = useRef<{
+    vortex: InstanceType<typeof import("@/lib/VortexGallery").default>;
+    lenis: InstanceType<typeof import("lenis").default>;
+  } | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [ready, setReady] = useState(false);
-  const [progress, setProgress] = useState(0);
 
   const images = galleryConfig.images;
   const hasImages = images.length > 0;
 
-  // Preload images with progress
+  // Phase 1: immediately show static cover (black bg + footer)
+  // Phase 2: async load atlas + lazy-load WebGL libs, then fade in canvas
   useEffect(() => {
     if (!hasImages) return;
 
-    let loaded = 0;
-    const total = images.length;
+    let cancelled = false;
 
-    const promises = images.map((item) => {
-      return new Promise<void>((resolve) => {
-        const img = new Image();
-        img.onload = () => {
-          loaded++;
-          setProgress(Math.round((loaded / total) * 100));
-          resolve();
-        };
-        img.onerror = () => {
-          loaded++;
-          setProgress(Math.round((loaded / total) * 100));
-          resolve();
-        };
-        img.src = item.src;
-      });
-    });
+    async function boot() {
+      const BASE = import.meta.env.BASE_URL;
 
-    Promise.all(promises).then(() => {
-      setReady(true);
-    });
-  }, [hasImages, images]);
+      // Load atlas image + metadata in parallel
+      const [atlasMeta, atlasImg] = await Promise.all([
+        fetch(`${BASE}atlas.json`).then((r) => r.json() as Promise<AtlasMeta[]>),
+        new Promise<HTMLImageElement>((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = "anonymous";
+          img.onload = () => resolve(img);
+          img.onerror = () => reject(new Error("atlas load failed"));
+          img.src = `${BASE}atlas.jpg`;
+        }),
+      ]);
 
-  useEffect(() => {
-    if (!canvasRef.current || !hasImages || !ready) return;
+      if (cancelled) return;
 
-    const vortex = new VortexGallery(
-      canvasRef.current,
-      images.map((i) => i.src)
-    );
-    vortexRef.current = vortex;
+      // Lazy-load heavy libraries after atlas is ready
+      const [{ default: VortexGallery }, { default: Lenis }] = await Promise.all([
+        import("@/lib/VortexGallery"),
+        import("lenis"),
+      ]);
 
-    const lenis = new Lenis({
-      lerp: 0.04,
-      smoothWheel: true,
-    });
-    lenisRef.current = lenis;
+      if (cancelled || !canvasRef.current) return;
 
-    lenis.on("scroll", () => {});
+      const imageInfos = atlasMeta.map((m) => ({
+        width: 256,
+        height: 256,
+        aspectRatio: m.aspectRatio,
+        uvs: { xStart: m.xStart, xEnd: m.xEnd, yStart: m.yStart, yEnd: m.yEnd },
+      }));
 
-    function raf(time: number) {
-      lenis.raf(time);
+      const vortex = new VortexGallery(canvasRef.current);
+      await vortex.initWithAtlas(`${BASE}atlas.jpg`, imageInfos);
+
+      const lenis = new Lenis({ lerp: 0.04, smoothWheel: true });
+      lenis.on("scroll", () => {});
+
+      function raf(time: number) {
+        lenis.raf(time);
+        requestAnimationFrame(raf);
+      }
       requestAnimationFrame(raf);
+
+      vortexRef.current = { vortex, lenis };
+      setReady(true);
     }
-    requestAnimationFrame(raf);
+
+    boot();
 
     return () => {
-      vortex.destroy();
-      lenis.destroy();
+      cancelled = true;
+      vortexRef.current?.vortex.destroy();
+      vortexRef.current?.lenis.destroy();
+      vortexRef.current = null;
     };
-  }, [hasImages, ready, images]);
+  }, [hasImages]);
 
   useEffect(() => {
-    vortexRef.current?.setPaused(selectedIdx !== null);
+    vortexRef.current?.vortex.setPaused(selectedIdx !== null);
   }, [selectedIdx]);
 
-  // Track fullscreen state
   useEffect(() => {
-    const onChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onChange);
     return () => document.removeEventListener("fullscreenchange", onChange);
   }, []);
@@ -101,7 +112,7 @@ export default function Home() {
   if (!hasImages) return null;
 
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const vortex = vortexRef.current;
+    const vortex = vortexRef.current?.vortex;
     const canvas = canvasRef.current;
     if (!vortex || !canvas) return;
     const idx = vortex.pickAtScreen(
@@ -109,9 +120,7 @@ export default function Home() {
       e.clientY,
       canvas.getBoundingClientRect()
     );
-    if (idx !== null) {
-      setSelectedIdx(idx);
-    }
+    if (idx !== null) setSelectedIdx(idx);
   };
 
   return (
@@ -124,51 +133,7 @@ export default function Home() {
         background: "#1a1a1a",
       }}
     >
-      {/* Loading screen */}
-      {!ready && (
-        <div
-          style={{
-            position: "absolute",
-            inset: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 50,
-            background: "#1a1a1a",
-            fontFamily: "system-ui, -apple-system, sans-serif",
-            color: "#e0e0e0",
-            gap: "24px",
-          }}
-        >
-          <div style={{ fontSize: "14px", letterSpacing: "0.1em", opacity: 0.6 }}>
-            负鼠表情包图鉴
-          </div>
-          <div
-            style={{
-              width: "200px",
-              height: "2px",
-              background: "rgba(255,255,255,0.1)",
-              borderRadius: "1px",
-              overflow: "hidden",
-            }}
-          >
-            <div
-              style={{
-                width: `${progress}%`,
-                height: "100%",
-                background: "rgba(255,255,255,0.6)",
-                transition: "width 0.2s ease",
-              }}
-            />
-          </div>
-          <div style={{ fontSize: "12px", opacity: 0.4 }}>
-            加载中 {progress}%
-          </div>
-        </div>
-      )}
-
-      {/* WebGL Canvas */}
+      {/* WebGL Canvas — fades in when ready */}
       <canvas
         ref={canvasRef}
         onClick={handleCanvasClick}
@@ -185,7 +150,7 @@ export default function Home() {
         }}
       />
 
-      {/* UI Overlay */}
+      {/* UI Overlay — fades in with canvas */}
       <div
         style={{
           position: "absolute",
@@ -217,7 +182,6 @@ export default function Home() {
             pointerEvents: "auto",
           }}
         >
-          {/* Left — fullscreen button */}
           <button
             onClick={toggleFullscreen}
             title={isFullscreen ? "退出全屏" : "全屏浏览"}
@@ -251,7 +215,6 @@ export default function Home() {
             {isFullscreen ? "退出全屏" : "全屏"}
           </button>
 
-          {/* Center — site info */}
           <div
             style={{
               display: "flex",
@@ -268,7 +231,6 @@ export default function Home() {
             <span style={{ opacity: 0.3 }}>|</span>
           </div>
 
-          {/* Right — placeholder for balance */}
           <div style={{ width: "70px" }} />
         </div>
       </div>

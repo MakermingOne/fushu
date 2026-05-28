@@ -150,7 +150,7 @@ export default class VortexGallery {
 
   private disposed = false;
 
-  constructor(canvas: HTMLCanvasElement, imagePaths: string[]) {
+  constructor(canvas: HTMLCanvasElement) {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1a1a1a);
 
@@ -171,7 +171,6 @@ export default class VortexGallery {
     this.renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
 
     this.setupEvents();
-    this.init(imagePaths);
   }
 
   async init(imagePaths: string[]) {
@@ -179,6 +178,39 @@ export default class VortexGallery {
     this.buildInstancedMesh();
     this.buildCenterMesh();
     this.render();
+  }
+
+  async initWithAtlas(
+    atlasUrl: string,
+    imageInfos: {
+      width: number;
+      height: number;
+      aspectRatio: number;
+      uvs: { xStart: number; xEnd: number; yStart: number; yEnd: number };
+    }[]
+  ) {
+    await this.loadPrebuiltAtlas(atlasUrl);
+    this.imageInfos = imageInfos;
+    this.buildInstancedMesh();
+    this.buildCenterMesh();
+    this.render();
+  }
+
+  async loadPrebuiltAtlas(atlasUrl: string) {
+    const atlasImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error(`Failed to load atlas: ${atlasUrl}`));
+      img.src = atlasUrl;
+    });
+
+    this.atlasTexture = new THREE.Texture(atlasImg);
+    this.atlasTexture.needsUpdate = true;
+    this.atlasTexture.generateMipmaps = true;
+    this.atlasTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    this.atlasTexture.magFilter = THREE.LinearFilter;
+    this.atlasTexture.colorSpace = THREE.SRGBColorSpace;
   }
 
   async loadTextureAtlas(paths: string[]) {
