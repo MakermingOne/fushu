@@ -5,7 +5,7 @@ import { inspectAttr } from 'kimi-plugin-inspect-react'
 
 // https://vite.dev/config/
 export default defineConfig({
-  base: '/fushu/',
+  // base defaults to '/' — GitHub Actions overrides with --base=/fushu/
   plugins: [inspectAttr(), react()],
   server: {
     port: 3000,
