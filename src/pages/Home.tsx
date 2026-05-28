@@ -13,12 +13,43 @@ export default function Home() {
   const lenisRef = useRef<Lenis | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [progress, setProgress] = useState(0);
 
   const images = galleryConfig.images;
   const hasImages = images.length > 0;
 
+  // Preload images with progress
   useEffect(() => {
-    if (!canvasRef.current || !hasImages) return;
+    if (!hasImages) return;
+
+    let loaded = 0;
+    const total = images.length;
+
+    const promises = images.map((item) => {
+      return new Promise<void>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          loaded++;
+          setProgress(Math.round((loaded / total) * 100));
+          resolve();
+        };
+        img.onerror = () => {
+          loaded++;
+          setProgress(Math.round((loaded / total) * 100));
+          resolve();
+        };
+        img.src = item.src;
+      });
+    });
+
+    Promise.all(promises).then(() => {
+      setReady(true);
+    });
+  }, [hasImages, images]);
+
+  useEffect(() => {
+    if (!canvasRef.current || !hasImages || !ready) return;
 
     const vortex = new VortexGallery(
       canvasRef.current,
@@ -44,7 +75,7 @@ export default function Home() {
       vortex.destroy();
       lenis.destroy();
     };
-  }, [hasImages, images]);
+  }, [hasImages, ready, images]);
 
   useEffect(() => {
     vortexRef.current?.setPaused(selectedIdx !== null);
@@ -93,6 +124,50 @@ export default function Home() {
         background: "#1a1a1a",
       }}
     >
+      {/* Loading screen */}
+      {!ready && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+            background: "#1a1a1a",
+            fontFamily: "system-ui, -apple-system, sans-serif",
+            color: "#e0e0e0",
+            gap: "24px",
+          }}
+        >
+          <div style={{ fontSize: "14px", letterSpacing: "0.1em", opacity: 0.6 }}>
+            负鼠表情包图鉴
+          </div>
+          <div
+            style={{
+              width: "200px",
+              height: "2px",
+              background: "rgba(255,255,255,0.1)",
+              borderRadius: "1px",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                width: `${progress}%`,
+                height: "100%",
+                background: "rgba(255,255,255,0.6)",
+                transition: "width 0.2s ease",
+              }}
+            />
+          </div>
+          <div style={{ fontSize: "12px", opacity: 0.4 }}>
+            加载中 {progress}%
+          </div>
+        </div>
+      )}
+
       {/* WebGL Canvas */}
       <canvas
         ref={canvasRef}
@@ -105,6 +180,8 @@ export default function Home() {
           height: "100%",
           zIndex: 1,
           cursor: "pointer",
+          opacity: ready ? 1 : 0,
+          transition: "opacity 0.8s ease",
         }}
       />
 
@@ -118,6 +195,8 @@ export default function Home() {
           height: "100%",
           zIndex: 10,
           pointerEvents: "none",
+          opacity: ready ? 1 : 0,
+          transition: "opacity 0.8s ease 0.2s",
         }}
       >
         {/* Bottom bar */}
